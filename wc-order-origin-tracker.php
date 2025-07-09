@@ -3,7 +3,7 @@
  * Plugin Name:       WooCommerce Order Origin Tracker
  * Plugin URI:        https://albpc.com/
  * Description:       Enhanced order origin tracking using WooCommerce Order Attribution (WC 8.5+) with custom tracking fallback. Provides detailed reports with filtering by traffic sources and ROAS analysis.
- * Version:           2.2.0
+ * Version:           2.2.3
  * Author:            Besi S
  * Author URI:        https://albpc.com/
  * License:           GPL v2 or later
@@ -11,6 +11,13 @@
  * Text Domain:       wc-order-origin-tracker
  * WC requires at least: 5.0
  * WC tested up to: 8.9
+ * 
+ * Changelog v2.2.3:
+ * - Enhanced PixelYourSite enrich data parsing to handle nested pys_utm structure
+ * - Added utm_medium:paid detection for Facebook ads identification
+ * - Updated normalize_origin method with comprehensive Facebook ads patterns
+ * - Fixed database queries to properly extract UTM data from nested pys_utm field
+ * - Improved origin grouping for better Facebook ads tracking accuracy
  */
 
 // Prevent direct file access for security
@@ -408,28 +415,32 @@ class WCOrderOriginTracker {
             
         } elseif ($use_pys_data) {
             // Method 4: PixelYourSite enrich data
+            // Note: Using SUBSTRING_INDEX with nested structure pys_utm field
             $available_utm_sources = $wpdb->get_results("SELECT DISTINCT 
-                SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'utm_source:', -1), '|', 1) AS value 
+                SUBSTRING_INDEX(SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'pys_utm', -1), 'utm_source:', -1), '|', 1) AS value 
                 FROM {$wpdb->prefix}postmeta AS pys_data 
                 WHERE pys_data.meta_key = 'pys_enrich_data' 
+                AND pys_data.meta_value LIKE '%pys_utm%' 
                 AND pys_data.meta_value LIKE '%utm_source:%' 
-                AND SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'utm_source:', -1), '|', 1) != ''
+                AND SUBSTRING_INDEX(SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'pys_utm', -1), 'utm_source:', -1), '|', 1) != ''
                 ORDER BY value ASC");
             
             $available_utm_mediums = $wpdb->get_results("SELECT DISTINCT 
-                SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'utm_medium:', -1), '|', 1) AS value 
+                SUBSTRING_INDEX(SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'pys_utm', -1), 'utm_medium:', -1), '|', 1) AS value 
                 FROM {$wpdb->prefix}postmeta AS pys_data 
                 WHERE pys_data.meta_key = 'pys_enrich_data' 
+                AND pys_data.meta_value LIKE '%pys_utm%' 
                 AND pys_data.meta_value LIKE '%utm_medium:%' 
-                AND SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'utm_medium:', -1), '|', 1) != ''
+                AND SUBSTRING_INDEX(SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'pys_utm', -1), 'utm_medium:', -1), '|', 1) != ''
                 ORDER BY value ASC");
             
             $available_utm_campaigns = $wpdb->get_results("SELECT DISTINCT 
-                SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'utm_campaign:', -1), '|', 1) AS value 
+                SUBSTRING_INDEX(SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'pys_utm', -1), 'utm_campaign:', -1), '|', 1) AS value 
                 FROM {$wpdb->prefix}postmeta AS pys_data 
                 WHERE pys_data.meta_key = 'pys_enrich_data' 
+                AND pys_data.meta_value LIKE '%pys_utm%' 
                 AND pys_data.meta_value LIKE '%utm_campaign:%' 
-                AND SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'utm_campaign:', -1), '|', 1) != ''
+                AND SUBSTRING_INDEX(SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'pys_utm', -1), 'utm_campaign:', -1), '|', 1) != ''
                 ORDER BY value ASC");
             
             $total_orders_with_origin = $wpdb->get_var(
@@ -439,7 +450,7 @@ class WCOrderOriginTracker {
                  WHERE posts.post_type = 'shop_order'
                  AND posts.post_status NOT IN ('trash', 'auto-draft')
                  AND pys_data.meta_key = 'pys_enrich_data'
-                 AND (pys_data.meta_value LIKE '%utm_source:%' OR pys_data.meta_value LIKE '%0138%')"
+                 AND (pys_data.meta_value LIKE '%pys_utm%' AND (pys_data.meta_value LIKE '%utm_source:%' OR pys_data.meta_value LIKE '%0138%' OR pys_data.meta_value LIKE '%utm_medium:paid%'))"
             );
         } else {
             // Fallback to custom origin tracking
@@ -552,21 +563,21 @@ class WCOrderOriginTracker {
                         AND posts.post_date >= %s AND posts.post_date < DATE_ADD(%s, INTERVAL 1 DAY)";
                         
         } elseif ($use_pys_data) {
-            // Method 4: PixelYourSite enrich data - Parse UTM from serialized data
+            // Method 4: PixelYourSite enrich data - Parse UTM from serialized data with nested pys_utm field
             $query = "SELECT
                         CASE 
-                            WHEN pys_data.meta_value LIKE '%utm_source:%' AND pys_data.meta_value LIKE '%utm_medium:%' THEN 
+                            WHEN pys_data.meta_value LIKE '%pys_utm%' AND pys_data.meta_value LIKE '%utm_source:%' AND pys_data.meta_value LIKE '%utm_medium:%' THEN 
                                 CONCAT('UTM: ', 
-                                    SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'utm_source:', -1), '|', 1), 
+                                    SUBSTRING_INDEX(SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'pys_utm', -1), 'utm_source:', -1), '|', 1), 
                                     ' / ', 
-                                    SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'utm_medium:', -1), '|', 1)
+                                    SUBSTRING_INDEX(SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'pys_utm', -1), 'utm_medium:', -1), '|', 1)
                                 )
-                            WHEN pys_data.meta_value LIKE '%utm_source:%' THEN 
-                                CONCAT('UTM: ', SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'utm_source:', -1), '|', 1))
-                            WHEN pys_data.meta_value LIKE '%utm_medium:%' THEN 
-                                CONCAT('UTM: ', SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'utm_medium:', -1), '|', 1))
-                            WHEN pys_data.meta_value LIKE '%utm_campaign:%' THEN 
-                                CONCAT('Campaign: ', SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'utm_campaign:', -1), '|', 1))
+                            WHEN pys_data.meta_value LIKE '%pys_utm%' AND pys_data.meta_value LIKE '%utm_source:%' THEN 
+                                CONCAT('UTM: ', SUBSTRING_INDEX(SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'pys_utm', -1), 'utm_source:', -1), '|', 1))
+                            WHEN pys_data.meta_value LIKE '%pys_utm%' AND pys_data.meta_value LIKE '%utm_medium:%' THEN 
+                                CONCAT('UTM: ', SUBSTRING_INDEX(SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'pys_utm', -1), 'utm_medium:', -1), '|', 1))
+                            WHEN pys_data.meta_value LIKE '%pys_utm%' AND pys_data.meta_value LIKE '%utm_campaign:%' THEN 
+                                CONCAT('Campaign: ', SUBSTRING_INDEX(SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'pys_utm', -1), 'utm_campaign:', -1), '|', 1))
                             ELSE 'Direct'
                         END AS origin,
                         COUNT(posts.ID) AS order_count
@@ -578,7 +589,7 @@ class WCOrderOriginTracker {
                         posts.post_type = 'shop_order'
                         AND posts.post_status NOT IN ('trash', 'auto-draft')
                         AND pys_data.meta_key = 'pys_enrich_data'
-                        AND (pys_data.meta_value LIKE '%utm_source:%' OR pys_data.meta_value LIKE '%0138%')
+                        AND (pys_data.meta_value LIKE '%pys_utm%' AND (pys_data.meta_value LIKE '%utm_source:%' OR pys_data.meta_value LIKE '%0138%' OR pys_data.meta_value LIKE '%utm_medium:paid%'))
                         AND posts.post_date >= %s AND posts.post_date < DATE_ADD(%s, INTERVAL 1 DAY)";
         } else {
             // Fallback to custom origin tracking
@@ -610,7 +621,7 @@ class WCOrderOriginTracker {
             } elseif ($use_post_meta) {
                 $filter_conditions[] = "utm_source.meta_value IN ($placeholders)";
             } elseif ($use_pys_data) {
-                $filter_conditions[] = "SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'utm_source:', -1), '|', 1) IN ($placeholders)";
+                $filter_conditions[] = "SUBSTRING_INDEX(SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'pys_utm', -1), 'utm_source:', -1), '|', 1) IN ($placeholders)";
             }
             $query_params = array_merge( $query_params, $selected_utm_sources );
         }
@@ -624,7 +635,7 @@ class WCOrderOriginTracker {
             } elseif ($use_post_meta) {
                 $filter_conditions[] = "utm_medium.meta_value IN ($placeholders)";
             } elseif ($use_pys_data) {
-                $filter_conditions[] = "SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'utm_medium:', -1), '|', 1) IN ($placeholders)";
+                $filter_conditions[] = "SUBSTRING_INDEX(SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'pys_utm', -1), 'utm_medium:', -1), '|', 1) IN ($placeholders)";
             }
             $query_params = array_merge( $query_params, $selected_utm_mediums );
         }
@@ -638,7 +649,7 @@ class WCOrderOriginTracker {
             } elseif ($use_post_meta) {
                 $filter_conditions[] = "utm_campaign.meta_value IN ($placeholders)";
             } elseif ($use_pys_data) {
-                $filter_conditions[] = "SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'utm_campaign:', -1), '|', 1) IN ($placeholders)";
+                $filter_conditions[] = "SUBSTRING_INDEX(SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'pys_utm', -1), 'utm_campaign:', -1), '|', 1) IN ($placeholders)";
             }
             $query_params = array_merge( $query_params, $selected_utm_campaigns );
         }
@@ -1512,39 +1523,75 @@ class WCOrderOriginTracker {
     }
 
     /**
+     * Check if the origin string contains Facebook ads indicators
+     *
+     * @param string $origin_lower The origin string in lowercase
+     * @return bool True if contains Facebook ads indicators
+     */
+    private function is_facebook_ads_origin($origin_lower) {
+        // Rule 1: Check if origin contains "0138" (Facebook ad campaigns)
+        if (strpos($origin_lower, '0138') !== false) {
+            // Additional check: if it contains "paid" OR looks like a Facebook campaign ID
+            $has_paid = strpos($origin_lower, 'paid') !== false;
+            $looks_like_fb_campaign = preg_match('/\d{10,}0138/', $origin_lower);
+            
+            if ($has_paid || $looks_like_fb_campaign) {
+                return true;
+            }
+        }
+        
+        // Rule 2: Check for utm_medium:paid (Facebook ads indicator)
+        if (strpos($origin_lower, 'utm_medium:paid') !== false || 
+            strpos($origin_lower, 'utm: ') !== false && strpos($origin_lower, 'paid') !== false) {
+            return true;
+        }
+        
+        // Rule 3: Check for common Facebook ads patterns
+        $fb_patterns = [
+            'facebook',
+            'fb ads',
+            'facebook ads',
+            'utm_medium:cpc',
+            'utm_medium:social',
+            'utm_medium:facebook'
+        ];
+        
+        foreach ($fb_patterns as $pattern) {
+            if (strpos($origin_lower, $pattern) !== false) {
+                return true;
+            }
+        }
+        
+        return false;
+    }
+
+    /**
      * Normalize origin names and group specific origins
-     * Groups origins containing both "0138" and "paid" into "Sales from FB ADS"
+     * Groups origins containing Facebook ads indicators into "Sales from FB ADS"
      *
      * @param string $origin The original origin string
      * @return string The normalized origin
      */
-         private function normalize_origin($origin) {
-         // Convert to lowercase for case-insensitive comparison
-         $origin_lower = strtolower($origin);
-         
-         // Rule for Instagram
-         if (strpos($origin_lower, 'instagram') !== false) {
-             error_log('WCOT: Grouping origin "' . $origin . '" into "Sales from Instagram"');
-             return 'Sales from Instagram';
-         }
-         
-         // Check if origin contains "0138" (Facebook ad campaigns)
-         // This covers both "0138 + paid" and numeric Facebook campaign IDs ending with "0138"
-         if (strpos($origin_lower, '0138') !== false) {
-             // Additional check: if it contains "paid" OR looks like a Facebook campaign ID
-             $has_paid = strpos($origin_lower, 'paid') !== false;
-             $looks_like_fb_campaign = preg_match('/\d{10,}0138/', $origin_lower); // Long numeric sequence ending with 0138
-             
-             if ($has_paid || $looks_like_fb_campaign) {
-                 // Debug: Log when origin is being grouped
-                 error_log('WCOT: Grouping origin "' . $origin . '" into "Sales from FB ADS" (Rule: 0138 + ' . ($has_paid ? 'paid' : 'FB campaign ID') . ')');
-                 return 'Sales from FB ADS';
-             }
-         }
-         
-         // Return original origin if no grouping rules match
-         return $origin;
-     }
+    private function normalize_origin($origin) {
+        // Convert to lowercase for case-insensitive comparison
+        $origin_lower = strtolower($origin);
+        
+        // Rule for Instagram
+        if (strpos($origin_lower, 'instagram') !== false) {
+            error_log('WCOT: Grouping origin "' . $origin . '" into "Sales from Instagram"');
+            return 'Sales from Instagram';
+        }
+        
+        // Rule for Facebook ads (using helper method)
+        if ($this->is_facebook_ads_origin($origin_lower)) {
+            // Debug: Log when origin is being grouped
+            error_log('WCOT: Grouping origin "' . $origin . '" into "Sales from FB ADS"');
+            return 'Sales from FB ADS';
+        }
+        
+        // Return original origin if no grouping rules match
+        return $origin;
+    }
 
     /**
      * Process and group results by normalized origins
@@ -1787,30 +1834,30 @@ class WCOrderOriginTracker {
                     posts.post_date,
                     posts.post_status,
                     CASE 
-                        WHEN pys_data.meta_value LIKE '%utm_source:%' AND pys_data.meta_value LIKE '%utm_medium:%' THEN 
+                        WHEN pys_data.meta_value LIKE '%pys_utm%' AND pys_data.meta_value LIKE '%utm_source:%' AND pys_data.meta_value LIKE '%utm_medium:%' THEN 
                             CONCAT('UTM: ', 
-                                SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'utm_source:', -1), '|', 1), 
+                                SUBSTRING_INDEX(SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'pys_utm', -1), 'utm_source:', -1), '|', 1), 
                                 ' / ', 
-                                SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'utm_medium:', -1), '|', 1)
+                                SUBSTRING_INDEX(SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'pys_utm', -1), 'utm_medium:', -1), '|', 1)
                             )
-                        WHEN pys_data.meta_value LIKE '%utm_source:%' THEN 
-                            CONCAT('UTM: ', SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'utm_source:', -1), '|', 1))
-                        WHEN pys_data.meta_value LIKE '%utm_medium:%' THEN 
-                            CONCAT('UTM: ', SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'utm_medium:', -1), '|', 1))
-                        WHEN pys_data.meta_value LIKE '%utm_campaign:%' THEN 
-                            CONCAT('Campaign: ', SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'utm_campaign:', -1), '|', 1))
+                        WHEN pys_data.meta_value LIKE '%pys_utm%' AND pys_data.meta_value LIKE '%utm_source:%' THEN 
+                            CONCAT('UTM: ', SUBSTRING_INDEX(SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'pys_utm', -1), 'utm_source:', -1), '|', 1))
+                        WHEN pys_data.meta_value LIKE '%pys_utm%' AND pys_data.meta_value LIKE '%utm_medium:%' THEN 
+                            CONCAT('UTM: ', SUBSTRING_INDEX(SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'pys_utm', -1), 'utm_medium:', -1), '|', 1))
+                        WHEN pys_data.meta_value LIKE '%pys_utm%' AND pys_data.meta_value LIKE '%utm_campaign:%' THEN 
+                            CONCAT('Campaign: ', SUBSTRING_INDEX(SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'pys_utm', -1), 'utm_campaign:', -1), '|', 1))
                         ELSE 'Direct'
                     END as origin,
-                    SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'utm_source:', -1), '|', 1) as utm_source,
-                    SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'utm_medium:', -1), '|', 1) as utm_medium,
-                    SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'utm_campaign:', -1), '|', 1) as utm_campaign,
+                    SUBSTRING_INDEX(SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'pys_utm', -1), 'utm_source:', -1), '|', 1) as utm_source,
+                    SUBSTRING_INDEX(SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'pys_utm', -1), 'utm_medium:', -1), '|', 1) as utm_medium,
+                    SUBSTRING_INDEX(SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'pys_utm', -1), 'utm_campaign:', -1), '|', 1) as utm_campaign,
                     pys_data.meta_value as raw_pys_data
                  FROM {$wpdb->prefix}posts AS posts
                  JOIN {$wpdb->prefix}postmeta AS pys_data ON posts.ID = pys_data.post_id
                  WHERE posts.post_type = 'shop_order'
                  AND posts.post_status IN ('wc-processing', 'wc-completed', 'wc-refunded', 'wc-pending')
                  AND pys_data.meta_key = 'pys_enrich_data'
-                 AND (pys_data.meta_value LIKE '%utm_source:%' OR pys_data.meta_value LIKE '%0138%')
+                 AND (pys_data.meta_value LIKE '%pys_utm%' AND (pys_data.meta_value LIKE '%utm_source:%' OR pys_data.meta_value LIKE '%0138%' OR pys_data.meta_value LIKE '%utm_medium:paid%'))
                  ORDER BY posts.post_date DESC
                  LIMIT 10"
             );
@@ -1942,22 +1989,16 @@ class WCOrderOriginTracker {
                 $custom_origin = $order->get_meta('_order_origin');
                 $pys_enrich_data = $order->get_meta('pys_enrich_data');
                 
-                // Parse pys_enrich_data if available
+                // Parse pys_enrich_data if available using the proper parsing method
                 $pys_utm_source = '';
                 $pys_utm_medium = '';
                 $pys_utm_campaign = '';
                 
                 if ($pys_enrich_data) {
-                    // Parse the serialized data to extract UTM parameters
-                    if (preg_match('/utm_source:([^|]+)/', $pys_enrich_data, $matches)) {
-                        $pys_utm_source = trim($matches[1]);
-                    }
-                    if (preg_match('/utm_medium:([^|]+)/', $pys_enrich_data, $matches)) {
-                        $pys_utm_medium = trim($matches[1]);
-                    }
-                    if (preg_match('/utm_campaign:([^|]+)/', $pys_enrich_data, $matches)) {
-                        $pys_utm_campaign = trim($matches[1]);
-                    }
+                    $pys_data = $this->parse_pys_enrich_data($pys_enrich_data);
+                    $pys_utm_source = $pys_data['utm_source'] ?? '';
+                    $pys_utm_medium = $pys_data['utm_medium'] ?? '';
+                    $pys_utm_campaign = $pys_data['utm_campaign'] ?? '';
                     
                     // Check if the entire pys_enrich_data contains "0138" (Facebook ad campaigns)
                     if (strpos($pys_enrich_data, '0138') !== false) {
@@ -2043,22 +2084,16 @@ class WCOrderOriginTracker {
                 $custom_origin = $order->get_meta('_order_origin');
                 $pys_enrich_data = $order->get_meta('pys_enrich_data');
                 
-                // Parse pys_enrich_data if available
+                // Parse pys_enrich_data if available using the proper parsing method
                 $pys_utm_source = '';
                 $pys_utm_medium = '';
                 $pys_utm_campaign = '';
                 
                 if ($pys_enrich_data) {
-                    // Parse the serialized data to extract UTM parameters
-                    if (preg_match('/utm_source:([^|]+)/', $pys_enrich_data, $matches)) {
-                        $pys_utm_source = trim($matches[1]);
-                    }
-                    if (preg_match('/utm_medium:([^|]+)/', $pys_enrich_data, $matches)) {
-                        $pys_utm_medium = trim($matches[1]);
-                    }
-                    if (preg_match('/utm_campaign:([^|]+)/', $pys_enrich_data, $matches)) {
-                        $pys_utm_campaign = trim($matches[1]);
-                    }
+                    $pys_data = $this->parse_pys_enrich_data($pys_enrich_data);
+                    $pys_utm_source = $pys_data['utm_source'] ?? '';
+                    $pys_utm_medium = $pys_data['utm_medium'] ?? '';
+                    $pys_utm_campaign = $pys_data['utm_campaign'] ?? '';
                     
                     // Check if the entire pys_enrich_data contains "0138" (Facebook ad campaigns)
                     if (strpos($pys_enrich_data, '0138') !== false) {
@@ -2170,6 +2205,15 @@ class WCOrderOriginTracker {
 
     /**
      * Parse PixelYourSite enrich data from serialized string
+     * 
+     * Example input format:
+     * a:9:{s:11:"pys_landing";s:48:"https://mc.local/transformohu-nga-shtepia/";s:10:"pys_source";s:6:"direct";s:7:"pys_utm";s:118:"utm_source:120226527565230138|utm_medium:paid|utm_campaign:last_24hr|utm_term:120226527565230138|utm_content:last_24hr";}
+     * 
+     * This method:
+     * 1. Unserializes the PHP array
+     * 2. Extracts UTM parameters from the nested pys_utm field
+     * 3. Falls back to direct regex parsing if unserialization fails
+     * 4. Properly handles utm_medium:paid for Facebook ads identification
      *
      * @param string $pys_enrich_data The serialized pys_enrich_data string
      * @return array Parsed data array
@@ -2177,29 +2221,64 @@ class WCOrderOriginTracker {
     private function parse_pys_enrich_data($pys_enrich_data) {
         $parsed_data = [];
         
-        // Extract UTM parameters using regex
-        if (preg_match('/utm_source:([^|]+)/', $pys_enrich_data, $matches)) {
-            $parsed_data['utm_source'] = trim($matches[1]);
-        }
-        if (preg_match('/utm_medium:([^|]+)/', $pys_enrich_data, $matches)) {
-            $parsed_data['utm_medium'] = trim($matches[1]);
-        }
-        if (preg_match('/utm_campaign:([^|]+)/', $pys_enrich_data, $matches)) {
-            $parsed_data['utm_campaign'] = trim($matches[1]);
-        }
-        if (preg_match('/utm_term:([^|]+)/', $pys_enrich_data, $matches)) {
-            $parsed_data['utm_term'] = trim($matches[1]);
-        }
-        if (preg_match('/utm_content:([^|]+)/', $pys_enrich_data, $matches)) {
-            $parsed_data['utm_content'] = trim($matches[1]);
-        }
+        // First, try to unserialize the PHP array
+        $unserialized = @unserialize($pys_enrich_data);
         
-        // Extract other PYS data
-        if (preg_match('/pys_source:([^|]+)/', $pys_enrich_data, $matches)) {
-            $parsed_data['pys_source'] = trim($matches[1]);
-        }
-        if (preg_match('/pys_landing:([^|]+)/', $pys_enrich_data, $matches)) {
-            $parsed_data['pys_landing'] = trim($matches[1]);
+        if ($unserialized && is_array($unserialized)) {
+            // Extract data from the unserialized array
+            if (isset($unserialized['pys_utm'])) {
+                $pys_utm = $unserialized['pys_utm'];
+                
+                // Extract UTM parameters from the pys_utm field
+                if (preg_match('/utm_source:([^|]+)/', $pys_utm, $matches)) {
+                    $parsed_data['utm_source'] = trim($matches[1]);
+                }
+                if (preg_match('/utm_medium:([^|]+)/', $pys_utm, $matches)) {
+                    $parsed_data['utm_medium'] = trim($matches[1]);
+                }
+                if (preg_match('/utm_campaign:([^|]+)/', $pys_utm, $matches)) {
+                    $parsed_data['utm_campaign'] = trim($matches[1]);
+                }
+                if (preg_match('/utm_term:([^|]+)/', $pys_utm, $matches)) {
+                    $parsed_data['utm_term'] = trim($matches[1]);
+                }
+                if (preg_match('/utm_content:([^|]+)/', $pys_utm, $matches)) {
+                    $parsed_data['utm_content'] = trim($matches[1]);
+                }
+            }
+            
+            // Extract other PYS data directly from the unserialized array
+            if (isset($unserialized['pys_source'])) {
+                $parsed_data['pys_source'] = $unserialized['pys_source'];
+            }
+            if (isset($unserialized['pys_landing'])) {
+                $parsed_data['pys_landing'] = $unserialized['pys_landing'];
+            }
+        } else {
+            // Fallback: try to extract UTM parameters directly from the raw string (old method)
+            if (preg_match('/utm_source:([^|]+)/', $pys_enrich_data, $matches)) {
+                $parsed_data['utm_source'] = trim($matches[1]);
+            }
+            if (preg_match('/utm_medium:([^|]+)/', $pys_enrich_data, $matches)) {
+                $parsed_data['utm_medium'] = trim($matches[1]);
+            }
+            if (preg_match('/utm_campaign:([^|]+)/', $pys_enrich_data, $matches)) {
+                $parsed_data['utm_campaign'] = trim($matches[1]);
+            }
+            if (preg_match('/utm_term:([^|]+)/', $pys_enrich_data, $matches)) {
+                $parsed_data['utm_term'] = trim($matches[1]);
+            }
+            if (preg_match('/utm_content:([^|]+)/', $pys_enrich_data, $matches)) {
+                $parsed_data['utm_content'] = trim($matches[1]);
+            }
+            
+            // Extract other PYS data from raw string
+            if (preg_match('/pys_source:([^|]+)/', $pys_enrich_data, $matches)) {
+                $parsed_data['pys_source'] = trim($matches[1]);
+            }
+            if (preg_match('/pys_landing:([^|]+)/', $pys_enrich_data, $matches)) {
+                $parsed_data['pys_landing'] = trim($matches[1]);
+            }
         }
         
         return $parsed_data;
