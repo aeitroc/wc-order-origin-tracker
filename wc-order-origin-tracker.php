@@ -3,7 +3,7 @@
  * Plugin Name:       WooCommerce Order Origin Tracker
  * Plugin URI:        https://albpc.com/
  * Description:       Enhanced order origin tracking using WooCommerce Order Attribution (WC 8.5+) with custom tracking fallback. Provides detailed reports with filtering by traffic sources and ROAS analysis.
- * Version:           2.2.3
+ * Version:           2.2.4
  * Author:            Besi S
  * Author URI:        https://albpc.com/
  * License:           GPL v2 or later
@@ -2204,25 +2204,31 @@ class WCOrderOriginTracker {
     }
 
     /**
-     * Parse PixelYourSite enrich data from serialized string
+     * Parse PixelYourSite enrich data from serialized string or array
      * 
      * Example input format:
      * a:9:{s:11:"pys_landing";s:48:"https://mc.local/transformohu-nga-shtepia/";s:10:"pys_source";s:6:"direct";s:7:"pys_utm";s:118:"utm_source:120226527565230138|utm_medium:paid|utm_campaign:last_24hr|utm_term:120226527565230138|utm_content:last_24hr";}
      * 
      * This method:
-     * 1. Unserializes the PHP array
+     * 1. Handles both serialized strings and already-unserialized arrays
      * 2. Extracts UTM parameters from the nested pys_utm field
      * 3. Falls back to direct regex parsing if unserialization fails
      * 4. Properly handles utm_medium:paid for Facebook ads identification
      *
-     * @param string $pys_enrich_data The serialized pys_enrich_data string
+     * @param string|array $pys_enrich_data The pys_enrich_data (serialized string or array)
      * @return array Parsed data array
      */
     private function parse_pys_enrich_data($pys_enrich_data) {
         $parsed_data = [];
         
-        // First, try to unserialize the PHP array
-        $unserialized = @unserialize($pys_enrich_data);
+        // Handle both serialized strings and already-unserialized arrays
+        if (is_array($pys_enrich_data)) {
+            // Data is already an array (WordPress auto-unserialized it)
+            $unserialized = $pys_enrich_data;
+        } else {
+            // Data is a serialized string, try to unserialize it
+            $unserialized = @unserialize($pys_enrich_data);
+        }
         
         if ($unserialized && is_array($unserialized)) {
             // Extract data from the unserialized array
