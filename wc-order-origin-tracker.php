@@ -179,6 +179,41 @@ class WCOrderOriginTracker {
         if ( $custom_origin ) {
             echo '<p><strong>' . esc_html__( 'Custom Origin:', 'wc-order-origin-tracker' ) . '</strong> ' . esc_html( $custom_origin ) . '</p>';
         }
+        
+        // Show PixelYourSite enrich data if available
+        $pys_enrich_data = $order->get_meta( 'pys_enrich_data' );
+        if ( $pys_enrich_data ) {
+            $pys_data = $this->parse_pys_enrich_data( $pys_enrich_data );
+            if ( !empty($pys_data) ) {
+                echo '<div style="margin-top: 10px; padding: 10px; background: #f0f8ff; border-left: 4px solid #0066cc;">';
+                echo '<p><strong>' . esc_html__( 'PixelYourSite Data:', 'wc-order-origin-tracker' ) . '</strong></p>';
+                
+                echo '<table style="margin-top: 5px;">';
+                if ( ! empty( $pys_data['utm_source'] ) ) {
+                    echo '<tr><td><strong>UTM Source:</strong></td><td>' . esc_html( $pys_data['utm_source'] ) . '</td></tr>';
+                }
+                if ( ! empty( $pys_data['utm_medium'] ) ) {
+                    echo '<tr><td><strong>UTM Medium:</strong></td><td>' . esc_html( $pys_data['utm_medium'] ) . '</td></tr>';
+                }
+                if ( ! empty( $pys_data['utm_campaign'] ) ) {
+                    echo '<tr><td><strong>UTM Campaign:</strong></td><td>' . esc_html( $pys_data['utm_campaign'] ) . '</td></tr>';
+                }
+                if ( ! empty( $pys_data['utm_term'] ) ) {
+                    echo '<tr><td><strong>UTM Term:</strong></td><td>' . esc_html( $pys_data['utm_term'] ) . '</td></tr>';
+                }
+                if ( ! empty( $pys_data['utm_content'] ) ) {
+                    echo '<tr><td><strong>UTM Content:</strong></td><td>' . esc_html( $pys_data['utm_content'] ) . '</td></tr>';
+                }
+                if ( ! empty( $pys_data['pys_source'] ) ) {
+                    echo '<tr><td><strong>PYS Source:</strong></td><td>' . esc_html( $pys_data['pys_source'] ) . '</td></tr>';
+                }
+                if ( ! empty( $pys_data['pys_landing'] ) ) {
+                    echo '<tr><td><strong>Landing Page:</strong></td><td>' . esc_html( $pys_data['pys_landing'] ) . '</td></tr>';
+                }
+                echo '</table>';
+                echo '</div>';
+            }
+        }
     }
 
     /**
@@ -309,10 +344,14 @@ class WCOrderOriginTracker {
         $utm_source_count = $wpdb->get_var("SELECT COUNT(*) FROM {$wpdb->prefix}postmeta WHERE meta_key = '_wc_order_attribution_utm_source'");
         $origin_count = $wpdb->get_var("SELECT COUNT(*) FROM {$wpdb->prefix}postmeta WHERE meta_key = '_wc_order_attribution_origin'");
         
+        // Check for pys_enrich_data (PixelYourSite data)
+        $pys_enrich_count = $wpdb->get_var("SELECT COUNT(*) FROM {$wpdb->prefix}postmeta WHERE meta_key = 'pys_enrich_data'");
+        
         // Determine which method to use based on available data
         $use_wc_attribution = false;
         $use_wc_meta = false;
         $use_post_meta = false;
+        $use_pys_data = false;
         
         if ($attribution_table_exists && $wc_attribution_count > 0) {
             $use_wc_attribution = true;
@@ -320,6 +359,8 @@ class WCOrderOriginTracker {
             $use_wc_meta = true;
         } elseif ($utm_source_count > 0 || $post_meta_count > 0) {
             $use_post_meta = true;
+        } elseif ($pys_enrich_count > 0) {
+            $use_pys_data = true;
         }
         
         // Get all available filter values based on the data source
@@ -365,6 +406,41 @@ class WCOrderOriginTracker {
                  AND (utm_source.meta_value IS NOT NULL OR utm_medium.meta_value IS NOT NULL OR utm_campaign.meta_value IS NOT NULL)"
             );
             
+        } elseif ($use_pys_data) {
+            // Method 4: PixelYourSite enrich data
+            $available_utm_sources = $wpdb->get_results("SELECT DISTINCT 
+                SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'utm_source:', -1), '|', 1) AS value 
+                FROM {$wpdb->prefix}postmeta AS pys_data 
+                WHERE pys_data.meta_key = 'pys_enrich_data' 
+                AND pys_data.meta_value LIKE '%utm_source:%' 
+                AND SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'utm_source:', -1), '|', 1) != ''
+                ORDER BY value ASC");
+            
+            $available_utm_mediums = $wpdb->get_results("SELECT DISTINCT 
+                SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'utm_medium:', -1), '|', 1) AS value 
+                FROM {$wpdb->prefix}postmeta AS pys_data 
+                WHERE pys_data.meta_key = 'pys_enrich_data' 
+                AND pys_data.meta_value LIKE '%utm_medium:%' 
+                AND SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'utm_medium:', -1), '|', 1) != ''
+                ORDER BY value ASC");
+            
+            $available_utm_campaigns = $wpdb->get_results("SELECT DISTINCT 
+                SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'utm_campaign:', -1), '|', 1) AS value 
+                FROM {$wpdb->prefix}postmeta AS pys_data 
+                WHERE pys_data.meta_key = 'pys_enrich_data' 
+                AND pys_data.meta_value LIKE '%utm_campaign:%' 
+                AND SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'utm_campaign:', -1), '|', 1) != ''
+                ORDER BY value ASC");
+            
+            $total_orders_with_origin = $wpdb->get_var(
+                "SELECT COUNT(DISTINCT posts.ID)
+                 FROM {$wpdb->prefix}posts AS posts
+                 JOIN {$wpdb->prefix}postmeta AS pys_data ON posts.ID = pys_data.post_id
+                 WHERE posts.post_type = 'shop_order'
+                 AND posts.post_status NOT IN ('trash', 'auto-draft')
+                 AND pys_data.meta_key = 'pys_enrich_data'
+                 AND (pys_data.meta_value LIKE '%utm_source:%' OR pys_data.meta_value LIKE '%0138%')"
+            );
         } else {
             // Fallback to custom origin tracking
             $all_origins = $wpdb->get_results(
@@ -475,6 +551,35 @@ class WCOrderOriginTracker {
                         AND (utm_source.meta_value IS NOT NULL OR utm_medium.meta_value IS NOT NULL OR utm_campaign.meta_value IS NOT NULL)
                         AND posts.post_date >= %s AND posts.post_date < DATE_ADD(%s, INTERVAL 1 DAY)";
                         
+        } elseif ($use_pys_data) {
+            // Method 4: PixelYourSite enrich data - Parse UTM from serialized data
+            $query = "SELECT
+                        CASE 
+                            WHEN pys_data.meta_value LIKE '%utm_source:%' AND pys_data.meta_value LIKE '%utm_medium:%' THEN 
+                                CONCAT('UTM: ', 
+                                    SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'utm_source:', -1), '|', 1), 
+                                    ' / ', 
+                                    SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'utm_medium:', -1), '|', 1)
+                                )
+                            WHEN pys_data.meta_value LIKE '%utm_source:%' THEN 
+                                CONCAT('UTM: ', SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'utm_source:', -1), '|', 1))
+                            WHEN pys_data.meta_value LIKE '%utm_medium:%' THEN 
+                                CONCAT('UTM: ', SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'utm_medium:', -1), '|', 1))
+                            WHEN pys_data.meta_value LIKE '%utm_campaign:%' THEN 
+                                CONCAT('Campaign: ', SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'utm_campaign:', -1), '|', 1))
+                            ELSE 'Direct'
+                        END AS origin,
+                        COUNT(posts.ID) AS order_count
+                     FROM
+                        {$wpdb->prefix}posts AS posts
+                     JOIN
+                        {$wpdb->prefix}postmeta AS pys_data ON posts.ID = pys_data.post_id
+                     WHERE
+                        posts.post_type = 'shop_order'
+                        AND posts.post_status NOT IN ('trash', 'auto-draft')
+                        AND pys_data.meta_key = 'pys_enrich_data'
+                        AND (pys_data.meta_value LIKE '%utm_source:%' OR pys_data.meta_value LIKE '%0138%')
+                        AND posts.post_date >= %s AND posts.post_date < DATE_ADD(%s, INTERVAL 1 DAY)";
         } else {
             // Fallback to custom origin tracking
             $query = "SELECT
@@ -504,6 +609,8 @@ class WCOrderOriginTracker {
                 $filter_conditions[] = "source.meta_value IN ($placeholders)";
             } elseif ($use_post_meta) {
                 $filter_conditions[] = "utm_source.meta_value IN ($placeholders)";
+            } elseif ($use_pys_data) {
+                $filter_conditions[] = "SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'utm_source:', -1), '|', 1) IN ($placeholders)";
             }
             $query_params = array_merge( $query_params, $selected_utm_sources );
         }
@@ -516,6 +623,8 @@ class WCOrderOriginTracker {
                 $filter_conditions[] = "medium.meta_value IN ($placeholders)";
             } elseif ($use_post_meta) {
                 $filter_conditions[] = "utm_medium.meta_value IN ($placeholders)";
+            } elseif ($use_pys_data) {
+                $filter_conditions[] = "SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'utm_medium:', -1), '|', 1) IN ($placeholders)";
             }
             $query_params = array_merge( $query_params, $selected_utm_mediums );
         }
@@ -528,6 +637,8 @@ class WCOrderOriginTracker {
                 $filter_conditions[] = "campaign.meta_value IN ($placeholders)";
             } elseif ($use_post_meta) {
                 $filter_conditions[] = "utm_campaign.meta_value IN ($placeholders)";
+            } elseif ($use_pys_data) {
+                $filter_conditions[] = "SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'utm_campaign:', -1), '|', 1) IN ($placeholders)";
             }
             $query_params = array_merge( $query_params, $selected_utm_campaigns );
         }
@@ -598,8 +709,8 @@ class WCOrderOriginTracker {
             $yesterday_end = $yesterday . ' 23:59:59';
             
             // Create modified queries for datetime comparison
-            $today_query = $this->modify_query_for_datetime($query, $use_wc_attribution, $use_wc_meta, $use_post_meta);
-            $yesterday_query = $this->modify_query_for_datetime($query, $use_wc_attribution, $use_wc_meta, $use_post_meta);
+            $today_query = $this->modify_query_for_datetime($query, $use_wc_attribution, $use_wc_meta, $use_post_meta, $use_pys_data);
+            $yesterday_query = $this->modify_query_for_datetime($query, $use_wc_attribution, $use_wc_meta, $use_post_meta, $use_pys_data);
             
             // Create today query parameters with datetime
             $today_query_params = [ $today_start, $today_end ];
@@ -672,7 +783,7 @@ class WCOrderOriginTracker {
                     'yesterday_end' => $yesterday_end,
                     'today_results_count' => count($results),
                     'yesterday_results_count' => count($yesterday_results),
-                    'query_used' => $use_wc_attribution ? 'wc_attribution' : ($use_wc_meta ? 'wc_meta' : ($use_post_meta ? 'post_meta' : 'custom')),
+                    'query_used' => $use_wc_attribution ? 'wc_attribution' : ($use_wc_meta ? 'wc_meta' : ($use_post_meta ? 'post_meta' : ($use_pys_data ? 'pys_data' : 'custom'))),
                     'is_today_report' => $is_today_report,
                     'start_date' => $start_date,
                     'end_date' => $end_date,
@@ -794,6 +905,14 @@ class WCOrderOriginTracker {
             <h1><?php esc_html_e( 'Order Origin Report', 'wc-order-origin-tracker' ); ?></h1>
             <p><?php esc_html_e( 'See where your orders are coming from. The tracking cookie is set on a visitor\'s first visit.', 'wc-order-origin-tracker' ); ?></p>
             <p style="color: #0073aa; font-size: 14px;"><em><?php esc_html_e( 'Default report shows the last 3 days. Use "Last 3 days" button or date filters to adjust the range.', 'wc-order-origin-tracker' ); ?></em></p>
+            
+            <?php if ($use_pys_data) : ?>
+            <div style="background: #e8f4fd; border: 1px solid #0066cc; border-radius: 6px; padding: 10px; margin-bottom: 20px;">
+                <p style="margin: 0; color: #0066cc; font-size: 14px;">
+                    📊 <strong>PixelYourSite Integration Active:</strong> This report includes orders with UTM data from PixelYourSite enrich data.
+                </p>
+            </div>
+            <?php endif; ?>
             
 
             
@@ -1582,10 +1701,12 @@ class WCOrderOriginTracker {
         // Check if WooCommerce Order Attribution table exists
         $attribution_table_exists = $wpdb->get_var("SHOW TABLES LIKE '{$wpdb->prefix}wc_order_attribution'");
         $utm_source_count = $wpdb->get_var("SELECT COUNT(*) FROM {$wpdb->prefix}postmeta WHERE meta_key = '_wc_order_attribution_utm_source'");
+        $pys_enrich_count = $wpdb->get_var("SELECT COUNT(*) FROM {$wpdb->prefix}postmeta WHERE meta_key = 'pys_enrich_data'");
         
         // Determine which method to use
         $use_wc_attribution = false;
         $use_post_meta = false;
+        $use_pys_data = false;
         
         if ($attribution_table_exists) {
             $wc_attribution_count = $wpdb->get_var("SELECT COUNT(*) FROM {$wpdb->prefix}wc_order_attribution");
@@ -1596,6 +1717,10 @@ class WCOrderOriginTracker {
         
         if (!$use_wc_attribution && $utm_source_count > 0) {
             $use_post_meta = true;
+        }
+        
+        if (!$use_wc_attribution && !$use_post_meta && $pys_enrich_count > 0) {
+            $use_pys_data = true;
         }
         
         if ($use_wc_attribution) {
@@ -1654,6 +1779,41 @@ class WCOrderOriginTracker {
                  ORDER BY posts.post_date DESC
                  LIMIT 10"
             );
+        } elseif ($use_pys_data) {
+            // Use PixelYourSite enrich data
+            return $wpdb->get_results(
+                "SELECT 
+                    posts.ID,
+                    posts.post_date,
+                    posts.post_status,
+                    CASE 
+                        WHEN pys_data.meta_value LIKE '%utm_source:%' AND pys_data.meta_value LIKE '%utm_medium:%' THEN 
+                            CONCAT('UTM: ', 
+                                SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'utm_source:', -1), '|', 1), 
+                                ' / ', 
+                                SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'utm_medium:', -1), '|', 1)
+                            )
+                        WHEN pys_data.meta_value LIKE '%utm_source:%' THEN 
+                            CONCAT('UTM: ', SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'utm_source:', -1), '|', 1))
+                        WHEN pys_data.meta_value LIKE '%utm_medium:%' THEN 
+                            CONCAT('UTM: ', SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'utm_medium:', -1), '|', 1))
+                        WHEN pys_data.meta_value LIKE '%utm_campaign:%' THEN 
+                            CONCAT('Campaign: ', SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'utm_campaign:', -1), '|', 1))
+                        ELSE 'Direct'
+                    END as origin,
+                    SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'utm_source:', -1), '|', 1) as utm_source,
+                    SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'utm_medium:', -1), '|', 1) as utm_medium,
+                    SUBSTRING_INDEX(SUBSTRING_INDEX(pys_data.meta_value, 'utm_campaign:', -1), '|', 1) as utm_campaign,
+                    pys_data.meta_value as raw_pys_data
+                 FROM {$wpdb->prefix}posts AS posts
+                 JOIN {$wpdb->prefix}postmeta AS pys_data ON posts.ID = pys_data.post_id
+                 WHERE posts.post_type = 'shop_order'
+                 AND posts.post_status IN ('wc-processing', 'wc-completed', 'wc-refunded', 'wc-pending')
+                 AND pys_data.meta_key = 'pys_enrich_data'
+                 AND (pys_data.meta_value LIKE '%utm_source:%' OR pys_data.meta_value LIKE '%0138%')
+                 ORDER BY posts.post_date DESC
+                 LIMIT 10"
+            );
         } else {
             // Fallback to custom origin tracking
             return $wpdb->get_results(
@@ -1677,7 +1837,7 @@ class WCOrderOriginTracker {
     /**
      * Modify query for datetime comparison instead of date comparison
      */
-    private function modify_query_for_datetime($query, $use_wc_attribution, $use_wc_meta, $use_post_meta) {
+    private function modify_query_for_datetime($query, $use_wc_attribution, $use_wc_meta, $use_post_meta, $use_pys_data = false) {
         if ($use_wc_attribution) {
             // For WooCommerce Order Attribution table
             $modified_query = str_replace(
@@ -1694,6 +1854,13 @@ class WCOrderOriginTracker {
             );
         } elseif ($use_post_meta) {
             // For Post Meta table
+            $modified_query = str_replace(
+                'AND posts.post_date >= %s AND posts.post_date < DATE_ADD(%s, INTERVAL 1 DAY)',
+                'AND posts.post_date >= %s AND posts.post_date <= %s',
+                $query
+            );
+        } elseif ($use_pys_data) {
+            // For PixelYourSite enrich data
             $modified_query = str_replace(
                 'AND posts.post_date >= %s AND posts.post_date < DATE_ADD(%s, INTERVAL 1 DAY)',
                 'AND posts.post_date >= %s AND posts.post_date <= %s',
@@ -1746,6 +1913,10 @@ class WCOrderOriginTracker {
                     'compare' => 'EXISTS'
                 ],
                 [
+                    'key'     => 'pys_enrich_data', // PixelYourSite data
+                    'compare' => 'EXISTS'
+                ],
+                [
                     'key'     => '_order_origin', // Custom tracking fallback
                     'value'   => 'UTM:',
                     'compare' => 'LIKE'
@@ -1769,8 +1940,35 @@ class WCOrderOriginTracker {
                 $utm_medium = $order->get_meta('_wc_order_attribution_utm_medium'); 
                 $utm_campaign = $order->get_meta('_wc_order_attribution_utm_campaign');
                 $custom_origin = $order->get_meta('_order_origin');
+                $pys_enrich_data = $order->get_meta('pys_enrich_data');
                 
-                // Determine origin
+                // Parse pys_enrich_data if available
+                $pys_utm_source = '';
+                $pys_utm_medium = '';
+                $pys_utm_campaign = '';
+                
+                if ($pys_enrich_data) {
+                    // Parse the serialized data to extract UTM parameters
+                    if (preg_match('/utm_source:([^|]+)/', $pys_enrich_data, $matches)) {
+                        $pys_utm_source = trim($matches[1]);
+                    }
+                    if (preg_match('/utm_medium:([^|]+)/', $pys_enrich_data, $matches)) {
+                        $pys_utm_medium = trim($matches[1]);
+                    }
+                    if (preg_match('/utm_campaign:([^|]+)/', $pys_enrich_data, $matches)) {
+                        $pys_utm_campaign = trim($matches[1]);
+                    }
+                    
+                    // Check if the entire pys_enrich_data contains "0138" (Facebook ad campaigns)
+                    if (strpos($pys_enrich_data, '0138') !== false) {
+                        // If it contains 0138, treat it as a potential Facebook ad
+                        if (empty($pys_utm_source) && empty($pys_utm_medium)) {
+                            $pys_utm_source = '0138';
+                        }
+                    }
+                }
+                
+                // Determine origin (prioritize WooCommerce attribution over pys data)
                 $origin = 'Direct';
                 if ($utm_source && $utm_medium) {
                     $origin = "UTM: {$utm_source} / {$utm_medium}";
@@ -1780,6 +1978,14 @@ class WCOrderOriginTracker {
                     $origin = "UTM: {$utm_medium}";
                 } elseif ($utm_campaign) {
                     $origin = "Campaign: {$utm_campaign}";
+                } elseif ($pys_utm_source && $pys_utm_medium) {
+                    $origin = "UTM: {$pys_utm_source} / {$pys_utm_medium}";
+                } elseif ($pys_utm_source) {
+                    $origin = "UTM: {$pys_utm_source}";
+                } elseif ($pys_utm_medium) {
+                    $origin = "UTM: {$pys_utm_medium}";
+                } elseif ($pys_utm_campaign) {
+                    $origin = "Campaign: {$pys_utm_campaign}";
                 } elseif ($custom_origin) {
                     $origin = $custom_origin;
                 }
@@ -1791,7 +1997,7 @@ class WCOrderOriginTracker {
                     'order_id' => $order_id,
                     'post_date' => $order->get_date_created()->date('Y-m-d H:i:s'),
                     'origin' => $origin,
-                    'has_utm' => !empty($utm_source) || !empty($utm_medium) || !empty($utm_campaign)
+                    'has_utm' => !empty($utm_source) || !empty($utm_medium) || !empty($utm_campaign) || !empty($pys_utm_source) || !empty($pys_utm_medium) || !empty($pys_utm_campaign)
                 ];
             }
             wp_reset_postdata();
@@ -1835,10 +2041,37 @@ class WCOrderOriginTracker {
                 $utm_medium = $order->get_meta('_wc_order_attribution_utm_medium');
                 $utm_campaign = $order->get_meta('_wc_order_attribution_utm_campaign');
                 $custom_origin = $order->get_meta('_order_origin');
+                $pys_enrich_data = $order->get_meta('pys_enrich_data');
                 
-                $has_utm = !empty($utm_source) || !empty($utm_medium) || !empty($utm_campaign) || !empty($custom_origin);
+                // Parse pys_enrich_data if available
+                $pys_utm_source = '';
+                $pys_utm_medium = '';
+                $pys_utm_campaign = '';
                 
-                // Determine origin
+                if ($pys_enrich_data) {
+                    // Parse the serialized data to extract UTM parameters
+                    if (preg_match('/utm_source:([^|]+)/', $pys_enrich_data, $matches)) {
+                        $pys_utm_source = trim($matches[1]);
+                    }
+                    if (preg_match('/utm_medium:([^|]+)/', $pys_enrich_data, $matches)) {
+                        $pys_utm_medium = trim($matches[1]);
+                    }
+                    if (preg_match('/utm_campaign:([^|]+)/', $pys_enrich_data, $matches)) {
+                        $pys_utm_campaign = trim($matches[1]);
+                    }
+                    
+                    // Check if the entire pys_enrich_data contains "0138" (Facebook ad campaigns)
+                    if (strpos($pys_enrich_data, '0138') !== false) {
+                        // If it contains 0138, treat it as a potential Facebook ad
+                        if (empty($pys_utm_source) && empty($pys_utm_medium)) {
+                            $pys_utm_source = '0138';
+                        }
+                    }
+                }
+                
+                $has_utm = !empty($utm_source) || !empty($utm_medium) || !empty($utm_campaign) || !empty($pys_utm_source) || !empty($pys_utm_medium) || !empty($pys_utm_campaign) || !empty($custom_origin);
+                
+                // Determine origin (prioritize WooCommerce attribution over pys data)
                 $origin = 'Direct';
                 if ($utm_source && $utm_medium) {
                     $origin = "UTM: {$utm_source} / {$utm_medium}";
@@ -1848,6 +2081,14 @@ class WCOrderOriginTracker {
                     $origin = "UTM: {$utm_medium}";
                 } elseif ($utm_campaign) {
                     $origin = "Campaign: {$utm_campaign}";
+                } elseif ($pys_utm_source && $pys_utm_medium) {
+                    $origin = "UTM: {$pys_utm_source} / {$pys_utm_medium}";
+                } elseif ($pys_utm_source) {
+                    $origin = "UTM: {$pys_utm_source}";
+                } elseif ($pys_utm_medium) {
+                    $origin = "UTM: {$pys_utm_medium}";
+                } elseif ($pys_utm_campaign) {
+                    $origin = "Campaign: {$pys_utm_campaign}";
                 } elseif ($custom_origin) {
                     $origin = $custom_origin;
                 }
@@ -1925,6 +2166,43 @@ class WCOrderOriginTracker {
         echo "</ul>";
         
         echo "</div>";
+    }
+
+    /**
+     * Parse PixelYourSite enrich data from serialized string
+     *
+     * @param string $pys_enrich_data The serialized pys_enrich_data string
+     * @return array Parsed data array
+     */
+    private function parse_pys_enrich_data($pys_enrich_data) {
+        $parsed_data = [];
+        
+        // Extract UTM parameters using regex
+        if (preg_match('/utm_source:([^|]+)/', $pys_enrich_data, $matches)) {
+            $parsed_data['utm_source'] = trim($matches[1]);
+        }
+        if (preg_match('/utm_medium:([^|]+)/', $pys_enrich_data, $matches)) {
+            $parsed_data['utm_medium'] = trim($matches[1]);
+        }
+        if (preg_match('/utm_campaign:([^|]+)/', $pys_enrich_data, $matches)) {
+            $parsed_data['utm_campaign'] = trim($matches[1]);
+        }
+        if (preg_match('/utm_term:([^|]+)/', $pys_enrich_data, $matches)) {
+            $parsed_data['utm_term'] = trim($matches[1]);
+        }
+        if (preg_match('/utm_content:([^|]+)/', $pys_enrich_data, $matches)) {
+            $parsed_data['utm_content'] = trim($matches[1]);
+        }
+        
+        // Extract other PYS data
+        if (preg_match('/pys_source:([^|]+)/', $pys_enrich_data, $matches)) {
+            $parsed_data['pys_source'] = trim($matches[1]);
+        }
+        if (preg_match('/pys_landing:([^|]+)/', $pys_enrich_data, $matches)) {
+            $parsed_data['pys_landing'] = trim($matches[1]);
+        }
+        
+        return $parsed_data;
     }
 
     /**
