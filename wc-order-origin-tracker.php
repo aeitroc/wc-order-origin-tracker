@@ -3,7 +3,7 @@
  * Plugin Name:       WooCommerce Order Origin Tracker
  * Plugin URI:        https://albpc.com/
  * Description:       Enhanced order origin tracking using WooCommerce Order Attribution (WC 8.5+) with custom tracking fallback. Provides detailed reports with filtering by traffic sources and ROAS analysis.
- * Version:           2.2.4
+ * Version:           2.2.5
  * Author:            Besi S
  * Author URI:        https://albpc.com/
  * License:           GPL v2 or later
